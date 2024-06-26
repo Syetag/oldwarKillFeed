@@ -11,7 +11,7 @@ This range is needed so that the effect key is not generated in it:
 - MaxEffectKey = 150;
 
 **REQUIRED ❗❗❗**
-**UI - [Steam Workshop Link](https://steamcommunity.com/sharedfiles/filedetails/?id=3239310495)**
+**UI - [Steam Workshop Link](https://steamcommunity.com/sharedfiles/filedetails/?id=3276043866)**
 
 ## Features
 
