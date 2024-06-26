@@ -15,7 +15,7 @@ This range is needed so that the effect key is not generated in it:
 
 ## Features
 
-- **When a player dies, a KillFeed entry is shown to all players!":**
+- **When a player dies, a KillFeed entry is shown to all players!:**
 ![ezgif com-video-to-gif-converter](https://github.com/Syetag/oldwarKillFeed/assets/109528894/935a0b7b-6016-4238-a410-9521efab3ec9)
 
 - **Any player's death is logged, even death from acid, cold or from another player!:**
