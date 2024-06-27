@@ -62,9 +62,16 @@ namespace oldwar
 
         private void OnPlayerDisconnected(UnturnedPlayer player)
         {
-            if (playersKillData.TryRemove(player.CSteamID, out var data))
+            try
             {
-                data.KillFeedSemaphore.Dispose();
+                if (playersKillData.TryRemove(player.CSteamID, out var killData))
+                {
+                    killData.KillFeedSemaphore.Dispose();
+                }
+            }
+            catch (Exception ex)
+            {
+                Rocket.Core.Logging.Logger.LogException(ex, $"[oldwarKillFeed] oldwarKillFeed.OnPlayerDisconnected");
             }
         }
 
@@ -112,71 +119,89 @@ namespace oldwar
                 return;
             }
 
-            string playerName = $"<color=#{Configuration.Instance.PlayerNameColor}>[{player.DisplayName}]</color>";
-            string murdererName = "";
-            string weaponName = "";
-            string weaponColor = "#FFFFFF";
-
-            if (cause == EDeathCause.GUN || cause == EDeathCause.MELEE || cause == EDeathCause.PUNCH)
+            try
             {
-                UnturnedPlayer murdererPlayer = UnturnedPlayer.FromCSteamID(murderer);
-                murdererName = murdererPlayer == null || murdererPlayer.DisplayName == null
-                    ? $"<color=#{Configuration.Instance.PlayerNameColor}>[{Translate("UnknownPlayer", player.CSteamID)}]</color>"
-                    : $"<color=#{Configuration.Instance.PlayerNameColor}>[{murdererPlayer.DisplayName}]</color>";
+                string playerName = $"<color=#{Configuration.Instance.PlayerNameColor}>[{player.DisplayName}]</color>";
+                string murdererName = "";
+                string weaponName = "";
+                string weaponColor = "#FFFFFF";
 
-                if (murdererPlayer != null)
+                if (cause == EDeathCause.GUN || cause == EDeathCause.MELEE || cause == EDeathCause.PUNCH)
                 {
-                    if (murdererPlayer.Player.equipment.asset is ItemGunAsset gunAsset)
+                    UnturnedPlayer murdererPlayer = UnturnedPlayer.FromCSteamID(murderer);
+                    murdererName = murdererPlayer == null || murdererPlayer.DisplayName == null
+                        ? $"<color=#{Configuration.Instance.PlayerNameColor}>[{Translate("UnknownPlayer", player.CSteamID)}]</color>"
+                        : $"<color=#{Configuration.Instance.PlayerNameColor}>[{murdererPlayer.DisplayName}]</color>";
+
+                    if (murdererPlayer != null)
                     {
-                        weaponName = gunAsset.itemName;
-                        weaponColor = Palette.hex(ItemTool.getRarityColorUI(gunAsset.rarity));
-                    }
-                    else if (murdererPlayer.Player.equipment.asset is ItemMeleeAsset meleeAsset)
-                    {
-                        weaponName = meleeAsset.itemName;
-                        weaponColor = Palette.hex(ItemTool.getRarityColorUI(meleeAsset.rarity));
+                        if (murdererPlayer.Player.equipment.asset is ItemGunAsset gunAsset)
+                        {
+                            weaponName = gunAsset.itemName;
+                            weaponColor = Palette.hex(ItemTool.getRarityColorUI(gunAsset.rarity));
+                        }
+                        else if (murdererPlayer.Player.equipment.asset is ItemMeleeAsset meleeAsset)
+                        {
+                            weaponName = meleeAsset.itemName;
+                            weaponColor = Palette.hex(ItemTool.getRarityColorUI(meleeAsset.rarity));
+                        }
                     }
                 }
+
+                string deathColor = "#FFFFFF";
+                string killMessage = GenerateKillMessage(playerName, murdererName, deathColor, cause, weaponName, weaponColor, player);
+
+                foreach (var client in Provider.clients)
+                {
+                    var targetPlayer = UnturnedPlayer.FromSteamPlayer(client);
+                    SendKillMessage(targetPlayer, killMessage);
+                }
             }
-
-            string deathColor = "#FFFFFF";
-            string killMessage = GenerateKillMessage(playerName, murdererName, deathColor, cause, weaponName, weaponColor, player);
-
-            foreach (var client in Provider.clients)
+            catch (Exception ex)
             {
-                var targetPlayer = UnturnedPlayer.FromSteamPlayer(client);
-                SendKillMessage(targetPlayer, killMessage);
+                Rocket.Core.Logging.Logger.LogException(ex, $"[oldwarKillFeed] oldwarKillFeed.OnPlayerDeath");
             }
         }
 
         private void SendKillMessage(UnturnedPlayer player, string killMessage)
         {
-            var killdata = GetData(player);
-            if (killdata == null)
+            if (player == null)
+            {
+                return;
+            }
+
+            var killData = GetData(player);
+            if (killData == null)
             {
                 return;
             }
 
             try
             {
+                if (!killData.KillFeedSemaphore.Wait(8000))
+                {
+                    Rocket.Core.Logging.Logger.LogError($"[oldwarKillFeed] Timeout while waiting for semaphore for player {player.DisplayName} ({player.CSteamID}). Possible deadlock in oldwarKillFeed.SendKillMessage.");
+                    return;
+                }
+
                 short uniqueEffectKey = GenerateUniqueEffectKey();
-                int currentIndex = killdata.KillFeedData.Count;
+                int currentIndex = killData.KillFeedData.Count;
 
                 if (currentIndex >= 5)
                 {
-                    (string message, short key, float startTime) = killdata.KillFeedData[0];
+                    (string message, short key, float startTime) = killData.KillFeedData[0];
                     HideTextElement(player, key, 0);
-                    killdata.KillFeedData.RemoveAt(0);
+                    killData.KillFeedData.RemoveAt(0);
                     currentIndex--;
 
                     for (int i = 0; i < currentIndex; ++i)
                     {
-                        killdata.KillFeedData[i] = (killdata.KillFeedData[i].message, killdata.KillFeedData[i].key, killdata.KillFeedData[i].startTime);
-                        MoveTextElementUp(player, killdata.KillFeedData[i].key, i + 1, i, killdata.KillFeedData[i].startTime);
+                        killData.KillFeedData[i] = (killData.KillFeedData[i].message, killData.KillFeedData[i].key, killData.KillFeedData[i].startTime);
+                        MoveTextElementUp(player, killData.KillFeedData[i].key, i + 1, i, killData.KillFeedData[i].startTime);
                     }
                 }
 
-                killdata.KillFeedData.Add((killMessage, uniqueEffectKey, Time.time));
+                killData.KillFeedData.Add((killMessage, uniqueEffectKey, Time.time));
                 CreateUI(player, uniqueEffectKey, currentIndex, killMessage);
                 StartCoroutine(HideMessageAfterDelay(player, uniqueEffectKey, currentIndex, 5f));
             }
@@ -184,8 +209,15 @@ namespace oldwar
             {
                 Rocket.Core.Logging.Logger.LogException(ex, "[oldwarKillFeed] oldwarKillFeed.SendKillMessage");
             }
+            finally
+            {
+                killData = GetData(player);
+                if (killData != null)
+                {
+                    killData.KillFeedSemaphore.Release();
+                }
+            }
         }
-
 
         private string GenerateKillMessage(string playerName, string murdererName, string deathColor, EDeathCause cause, string weaponName, string weaponColor, UnturnedPlayer player)
         {
@@ -256,8 +288,16 @@ namespace oldwar
         {
             yield return new WaitForSeconds(delay);
 
+            if (player == null)
+            {
+                yield break;
+            }
+
             var killData = GetData(player);
-            if (killData == null) yield break;
+            if (killData == null)
+            {
+                yield break;
+            }
 
             try
             {
@@ -284,10 +324,19 @@ namespace oldwar
 
         private void MoveTextElementUp(UnturnedPlayer player, short key, int currentIndex, int targetIndex, float startTime)
         {
+            if (player == null)
+            {
+                return;
+            }
+
+            var killData = GetData(player);
+            if (killData == null)
+            {
+                return;
+            }
+
             try
             {
-                var killData = GetData(player);
-                if (killData == null) return;
 
                 EffectManager.sendUIEffectVisibility(key, player.Player.channel.owner.transportConnection, true, $"Text{currentIndex}", false);
 
@@ -311,6 +360,11 @@ namespace oldwar
 
         public void CreateUI(UnturnedPlayer player, short key, int index, string message)
         {
+            if (player == null)
+            {
+                return;
+            }
+
             try
             {
                 EffectManager.sendUIEffect(Configuration.Instance.EffectID, key, player.Player.channel.owner.transportConnection, true);
@@ -331,6 +385,11 @@ namespace oldwar
 
         private void HideTextElement(UnturnedPlayer player, short key, int index)
         {
+            if (player == null)
+            {
+                return;
+            }
+
             try
             {
                 EffectManager.sendUIEffectVisibility(key, player.Player.channel.owner.transportConnection, true, $"Text{index}", false);
@@ -343,13 +402,25 @@ namespace oldwar
 
         public short GenerateUniqueEffectKey()
         {
-            short key;
-            do
-            {
-                key = (short)UnityEngine.Random.Range(short.MinValue, short.MaxValue);
-            } while (key >= Configuration.Instance.MinEffectKey && key <= Configuration.Instance.MaxEffectKey);
+            HashSet<short> usedKeys = new HashSet<short>();
 
-            return key;
+            while (true)
+            {
+                try
+                {
+                    short key = (short)UnityEngine.Random.Range(short.MinValue, short.MaxValue);
+
+                    if (usedKeys.Add(key) && (key < Configuration.Instance.MinEffectKey || key > Configuration.Instance.MaxEffectKey))
+                    {
+                        return key;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Rocket.Core.Logging.Logger.LogException(ex, "[oldwarKillFeed] oldwarKillFeed.GenerateUniqueEffectKey.");
+                    return -1;
+                }
+            }
         }
     }
 }
