@@ -40,13 +40,6 @@ namespace oldwar
             UnturnedPlayerEvents.OnPlayerDeath -= OnPlayerDeath;
             U.Events.OnPlayerDisconnected -= OnPlayerDisconnected;
 
-            foreach (var killData in playersKillData.Values)
-            {
-                killData.CancellationTokenSource.Cancel();
-                killData.KillFeedSemaphore.Dispose();
-            }
-
-            playersKillData.Clear();
             Instance = null;
         }
 
