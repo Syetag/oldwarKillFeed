@@ -6,11 +6,10 @@ using Rocket.Unturned.Player;
 using SDG.Unturned;
 using Steamworks;
 using System;
-using System.Collections;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Threading;
-using UnityEngine;
+using System.Threading.Tasks;
 
 namespace oldwar
 {
@@ -22,8 +21,9 @@ namespace oldwar
 
         private class PlayerKillData
         {
-            public List<(string message, short key, float startTime)> KillFeedData { get; } = new List<(string, short, float)>();
+            public List<(string message, short key, DateTime startTime)> KillFeedData { get; } = new List<(string, short, DateTime)>();
             public SemaphoreSlim KillFeedSemaphore { get; } = new SemaphoreSlim(1, 1);
+            public CancellationTokenSource CancellationTokenSource { get; } = new CancellationTokenSource();
         }
 
         protected override void Load()
@@ -39,6 +39,14 @@ namespace oldwar
         {
             UnturnedPlayerEvents.OnPlayerDeath -= OnPlayerDeath;
             U.Events.OnPlayerDisconnected -= OnPlayerDisconnected;
+
+            foreach (var killData in playersKillData.Values)
+            {
+                killData.CancellationTokenSource.Cancel();
+                killData.KillFeedSemaphore.Dispose();
+            }
+
+            playersKillData.Clear();
             Instance = null;
         }
 
@@ -66,6 +74,7 @@ namespace oldwar
             {
                 if (playersKillData.TryRemove(player.CSteamID, out var killData))
                 {
+                    killData.CancellationTokenSource.Cancel();
                     killData.KillFeedSemaphore.Dispose();
                 }
             }
@@ -114,11 +123,6 @@ namespace oldwar
 
         private void OnPlayerDeath(UnturnedPlayer player, EDeathCause cause, ELimb limb, CSteamID murderer)
         {
-            if (player == null)
-            {
-                return;
-            }
-
             try
             {
                 string playerName = $"<color=#{Configuration.Instance.PlayerNameColor}>[{player.DisplayName}]</color>";
@@ -154,7 +158,7 @@ namespace oldwar
                 foreach (var client in Provider.clients)
                 {
                     var targetPlayer = UnturnedPlayer.FromSteamPlayer(client);
-                    SendKillMessage(targetPlayer, killMessage);
+                    _ = SendKillMessageAsync(targetPlayer, killMessage);
                 }
             }
             catch (Exception ex)
@@ -163,7 +167,7 @@ namespace oldwar
             }
         }
 
-        private void SendKillMessage(UnturnedPlayer player, string killMessage)
+        private async Task SendKillMessageAsync(UnturnedPlayer player, string killMessage)
         {
             if (player == null)
             {
@@ -178,9 +182,9 @@ namespace oldwar
 
             try
             {
-                if (!killData.KillFeedSemaphore.Wait(8000))
+                if (!await killData.KillFeedSemaphore.WaitAsync(8000, killData.CancellationTokenSource.Token))
                 {
-                    Rocket.Core.Logging.Logger.LogError($"[oldwarKillFeed] Timeout while waiting for semaphore for player {player.DisplayName} ({player.CSteamID}). Possible deadlock in oldwarKillFeed.SendKillMessage.");
+                    Rocket.Core.Logging.Logger.LogError($"[oldwarKillFeed] Timeout while waiting for semaphore for player {player.DisplayName} ({player.CSteamID}). Possible deadlock in oldwarKillFeed.SendKillMessageAsync.");
                     return;
                 }
 
@@ -189,7 +193,7 @@ namespace oldwar
 
                 if (currentIndex >= 5)
                 {
-                    (string message, short key, float startTime) = killData.KillFeedData[0];
+                    (string message, short key, DateTime startTime) = killData.KillFeedData[0];
                     HideTextElement(player, key, 0);
                     killData.KillFeedData.RemoveAt(0);
                     currentIndex--;
@@ -201,13 +205,18 @@ namespace oldwar
                     }
                 }
 
-                killData.KillFeedData.Add((killMessage, uniqueEffectKey, Time.time));
+                killData.KillFeedData.Add((killMessage, uniqueEffectKey, DateTime.Now));
                 CreateUI(player, uniqueEffectKey, currentIndex, killMessage);
-                StartCoroutine(HideMessageAfterDelay(player, uniqueEffectKey, currentIndex, 5f));
+
+                _ = HideMessageAfterDelayAsync(player, uniqueEffectKey, currentIndex, 5f, killData.CancellationTokenSource.Token);
+            }
+            catch (OperationCanceledException)
+            {
+
             }
             catch (Exception ex)
             {
-                Rocket.Core.Logging.Logger.LogException(ex, "[oldwarKillFeed] oldwarKillFeed.SendKillMessage");
+                Rocket.Core.Logging.Logger.LogException(ex, "[oldwarKillFeed] oldwarKillFeed.SendKillMessageAsync");
             }
             finally
             {
@@ -216,6 +225,48 @@ namespace oldwar
                 {
                     killData.KillFeedSemaphore.Release();
                 }
+            }
+        }
+
+        private async Task HideMessageAfterDelayAsync(UnturnedPlayer player, short key, int index, float delay, CancellationToken cancellationToken)
+        {
+            try
+            {
+                await Task.Delay(TimeSpan.FromSeconds(delay), cancellationToken);
+
+                if (player == null)
+                {
+                    return;
+                }
+
+                var killData = GetData(player);
+                if (killData == null)
+                {
+                    return;
+                }
+
+                HideTextElement(player, key, index);
+
+                int targetIndex = killData.KillFeedData.FindIndex(data => data.key == key);
+                if (targetIndex >= 0 && targetIndex < killData.KillFeedData.Count)
+                {
+                    killData.KillFeedData.RemoveAt(targetIndex);
+
+                    for (int i = targetIndex; i < killData.KillFeedData.Count; ++i)
+                    {
+                        (string message, short key1, DateTime startTime) = killData.KillFeedData[i];
+                        killData.KillFeedData[i] = (message, key1, startTime);
+                        MoveTextElementUp(player, key1, i + 1, i, startTime);
+                    }
+                }
+            }
+            catch (OperationCanceledException)
+            {
+
+            }
+            catch (Exception ex)
+            {
+                Rocket.Core.Logging.Logger.LogException(ex, "[oldwarKillFeed] oldwarKillFeed.HideMessageAfterDelayAsync");
             }
         }
 
@@ -284,45 +335,8 @@ namespace oldwar
             }
         }
 
-        private IEnumerator HideMessageAfterDelay(UnturnedPlayer player, short key, int index, float delay)
-        {
-            yield return new WaitForSeconds(delay);
 
-            if (player == null)
-            {
-                yield break;
-            }
-
-            var killData = GetData(player);
-            if (killData == null)
-            {
-                yield break;
-            }
-
-            try
-            {
-                HideTextElement(player, key, index);
-
-                int targetIndex = killData.KillFeedData.FindIndex(data => data.key == key);
-                if (targetIndex >= 0 && targetIndex < killData.KillFeedData.Count)
-                {
-                    killData.KillFeedData.RemoveAt(targetIndex);
-
-                    for (int i = targetIndex; i < killData.KillFeedData.Count; ++i)
-                    {
-                        (string message, short key1, float startTime) = killData.KillFeedData[i];
-                        killData.KillFeedData[i] = (message, key1, startTime);
-                        MoveTextElementUp(player, key1, i + 1, i, startTime);
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                Rocket.Core.Logging.Logger.LogException(ex, "[oldwarKillFeed] oldwarKillFeed.HideMessageAfterDelay");
-            }
-        }
-
-        private void MoveTextElementUp(UnturnedPlayer player, short key, int currentIndex, int targetIndex, float startTime)
+        private void MoveTextElementUp(UnturnedPlayer player, short key, int currentIndex, int targetIndex, DateTime startTime)
         {
             if (player == null)
             {
@@ -345,12 +359,11 @@ namespace oldwar
                 EffectManager.sendUIEffectVisibility(key, player.Player.channel.owner.transportConnection, true, $"Text{targetIndex}", true);
 
                 killData.KillFeedData[targetIndex] = (killData.KillFeedData[targetIndex].message, killData.KillFeedData[targetIndex].key, killData.KillFeedData[targetIndex].startTime);
-                float delay = 5f - (Time.time - startTime);
+                float delay = 5f - (float)(DateTime.Now - startTime).TotalSeconds;
                 if (delay < 0f)
                     delay = 0f;
 
-                StopCoroutine(HideMessageAfterDelay(player, key, currentIndex, 5f));
-                StartCoroutine(HideMessageAfterDelay(player, key, targetIndex, delay));
+                _ = HideMessageAfterDelayAsync(player, key, currentIndex, delay, killData.CancellationTokenSource.Token);
             }
             catch (Exception ex)
             {
