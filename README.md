@@ -1,4 +1,4 @@
-## Kilfeed++
+## Killfeed++
 
 **A fully working and beautifully designed KillFeed.**
 
