@@ -5,6 +5,7 @@
 **In the plugin config, you can change:**
 - EffectID = 14018;
 - PlayerNameColor = "FFD700";
+- MurderedNameColor = "FFD700";
   
 This range is needed so that the effect key is not generated in it:
 - MinEffectKey = 0;
