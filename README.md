@@ -5,7 +5,7 @@
 **In the plugin config, you can change:**
 - EffectID = 14018;
 - PlayerNameColor = "FFD700";
-- MurderedNameColor = "FFD700";
+- MurdererNameColor = "FFD700";
   
 This range is needed so that the effect key is not generated in it:
 - MinEffectKey = 0;
@@ -27,7 +27,9 @@ This range is needed so that the effect key is not generated in it:
 ## Important
         public override TranslationList DefaultTranslations => new TranslationList()
         {
-            { "UnknownPlayer", "Unknown Player" },
+            { "UnknownPlayer", "Unknown" },
+            { "UnknownMurderer", "Unknown" },
+            { "UnknownWeapon", "Unknown" },
             { "DeathCause_Bleeding", "bled out!" },
             { "DeathCause_Bones", "broke their bones!" },
             { "DeathCause_Freezing", "froze to death!" },
