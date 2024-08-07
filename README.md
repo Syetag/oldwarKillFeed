@@ -1,4 +1,4 @@
-## oldwarKillfeed - First-class Killfeed for your server!
+## Kilfeed++
 
 **A fully working and beautifully designed KillFeed.**
 
